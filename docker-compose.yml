@@ -22,24 +22,24 @@ services:
 
   web:
     build:
-      context: ./app
+      context: ./api
       dockerfile: Dockerfile
     container_name: erp_web
     env_file:
-      - ../.env
+      - .env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings
       PYTHONDONTWRITEBYTECODE: 1
       PYTHONUNBUFFERED: 1
     volumes:
-      - ./app:/app
-      - ./secrets/gcp-service-account.json:/secrets/gcp-service-account.json:ro
+      - ./api:/app
+      - ./secrets:/secrets:ro
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "8000:8000"
-    command: ["/bin/bash", "/app/entrypoint.sh"]
+    command: ["/app/entrypoint.sh"]
 
 volumes:
   pgdata:
