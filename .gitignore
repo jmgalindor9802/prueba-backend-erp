@@ -1,0 +1,58 @@
+# =====================
+# Archivos de Python
+# =====================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# =====================
+# Entorno virtual
+# =====================
+.venv/
+venv/
+ENV/
+
+# =====================
+# Configuración / IDE
+# =====================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# =====================
+# Archivos de Django
+# =====================
+db.sqlite3
+media/
+staticfiles/
+
+# =====================
+# Variables de entorno
+# =====================
+.env
+*.env
+
+# =====================
+# Google Cloud / AWS / Secrets
+# =====================
+secrets/
+*.json
+*.pem
+*.key
+
+# =====================
+# Archivos de Docker
+# =====================
+*.pid
+*.log
+*.out
