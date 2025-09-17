@@ -25,6 +25,13 @@ class DocumentViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
     serializer_class = DocumentSerializer
     permission_classes = [IsAuthenticated, IsCompanyMember]
 
+    def get_permissions(self):
+        permissions = super().get_permissions()
+        if getattr(self, "action", None) in {"approve", "reject"}:
+            permissions.append(IsStepApprover())
+        return permissions
+
+
     def get_queryset(self):
         user = self.request.user
         if not user or not user.is_authenticated:
@@ -93,7 +100,7 @@ class DocumentViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
         reason = request.data.get("reason", "")
 
         step = self._get_step(document, step_id)
-        IsStepApprover().ensure_user_is_step_approver(request, step)
+        self.check_object_permissions(request, step)
 
         if step.status == ValidationStatus.REJECTED:
             raise ValidationError("El paso fue rechazado y no puede aprobarse.")
@@ -136,7 +143,7 @@ class DocumentViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
         reason = request.data.get("reason", "")
 
         step = self._get_step(document, step_id)
-        IsStepApprover().ensure_user_is_step_approver(request, step)
+        self.check_object_permissions(request, step)
 
         now = timezone.now()
 

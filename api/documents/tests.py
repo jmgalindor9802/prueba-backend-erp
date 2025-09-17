@@ -166,7 +166,7 @@ class ValidationFlowSerializerTests(TestCase):
             [1, 2],
         )
 
-        class DocumentViewSetTests(APITestCase):
+class DocumentViewSetTests(APITestCase):
     """Pruebas de integración para los endpoints del viewset de documentos."""
 
     def setUp(self) -> None:
@@ -305,4 +305,22 @@ class ValidationFlowSerializerTests(TestCase):
         }
 
         response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_approve_denied_for_non_step_approver(self) -> None:
+        document = self._create_document_with_flow()
+        step = document.validation_flow.steps.get(order=1)
+
+        url = reverse("document-approve", kwargs={"pk": document.pk})
+        response = self.client.post(url, {"step_id": str(step.id)}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_reject_denied_for_non_step_approver(self) -> None:
+        document = self._create_document_with_flow()
+        step = document.validation_flow.steps.get(order=1)
+
+        url = reverse("document-reject", kwargs={"pk": document.pk})
+        response = self.client.post(url, {"step_id": str(step.id)}, format="json")
+
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

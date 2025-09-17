@@ -1,13 +1,9 @@
 """Permisos personalizados para la API de documentos."""
 
 from __future__ import annotations
-
 from typing import Any
-
-from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
-
-from .models import Company, CompanyMembership, Document
+from .models import Company, CompanyMembership, Document, ValidationStep
 
 
 class IsCompanyMember(BasePermission):
@@ -37,6 +33,8 @@ class IsCompanyMember(BasePermission):
         company: Company | None = None
         if isinstance(obj, Document):
             company = obj.company
+        elif isinstance(obj, ValidationStep):
+            company = obj.flow.document.company
         elif hasattr(obj, "company"):
             company = getattr(obj, "company")
 
@@ -47,17 +45,20 @@ class IsCompanyMember(BasePermission):
 
 
 class IsStepApprover(BasePermission):
-    """Permiso auxiliar para validar si el usuario es aprobador del paso."""
+    """Restringe operaciones a los usuarios asignados como aprobadores del paso."""
 
     message = "El usuario no está autorizado para operar sobre este paso."
+    restricted_actions = {"approve", "reject"}
 
-    def ensure_user_is_step_approver(self, request, step: Any) -> None:
-        user = request.user
-        if not user or not user.is_authenticated or step.approver_id != user.id:
-            raise PermissionDenied(self.message)
-
-    def has_permission(self, request, view) -> bool:  # pragma: no cover - controlado manualmente
+    def has_permission(self, request, view) -> bool:
         return True
 
-    def has_object_permission(self, request, view, obj: Document) -> bool:  # pragma: no cover - no usado directamente
+    def has_object_permission(self, request, view, obj: Any) -> bool:
+        if getattr(view, "action", None) not in self.restricted_actions:
+            return True
+
+        if isinstance(obj, ValidationStep):
+            user = request.user
+            return bool(user and user.is_authenticated and obj.approver_id == user.id)
+
         return True
