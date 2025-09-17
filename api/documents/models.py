@@ -21,6 +21,12 @@ class Company(TimeStampedUUIDModel):
     """Entidad que representa una compañía dueña de documentos."""
 
     name = models.CharField(max_length=255)
+    members = models.ManyToManyField(
+    settings.AUTH_USER_MODEL,
+    through="CompanyMembership",
+    related_name="companies",
+    blank=True,
+    )
 
     def __str__(self) -> str:  # pragma: no cover - representación simple
         return self.name
@@ -112,3 +118,21 @@ class ValidationStep(TimeStampedUUIDModel):
 
     def __str__(self) -> str:  # pragma: no cover - representación simple
         return f"Paso {self.order} - {self.get_status_display()}"
+
+class CompanyMembership(TimeStampedUUIDModel):
+    """Relación entre usuarios y compañías a las que pertenecen."""
+
+    company = models.ForeignKey(
+        Company, on_delete=models.CASCADE, related_name="memberships"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="company_memberships",
+    )
+
+    class Meta:
+        unique_together = ("company", "user")
+
+    def __str__(self) -> str:  # pragma: no cover - representación simple
+        return f"{self.user_id} -> {self.company_id}"
