@@ -36,6 +36,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -132,9 +133,10 @@ STORAGES = {
         "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
     },
     "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
+WHITENOISE_USE_FINDERS = env.bool("WHITENOISE_USE_FINDERS", default=DEBUG)
 
 GS_BUCKET_NAME = env("GCS_BUCKET", default="documentos-17092025")
 GS_PROJECT_ID = env("GCP_PROJECT_ID", default="prueba-472420")

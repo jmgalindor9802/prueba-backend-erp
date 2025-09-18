@@ -71,8 +71,13 @@ class DocumentSerializerTests(TestCase):
         )
         flow = document.validation_flow
         self.assertEqual(flow.steps.count(), 2)
-        orders = list(flow.steps.values_list("order", flat=True))
-        self.assertListEqual(orders, [1, 2])
+         steps = list(flow.steps.order_by("order"))
+        self.assertListEqual([step.order for step in steps], [1, 2])
+        self.assertEqual([step.approver for step in steps], [self.user, extra_user])
+        self.assertTrue(
+            all(step.status == ValidationStatus.PENDING for step in steps),
+            "Los pasos deben iniciar en estado pendiente",
+        )
 
     def test_rechaza_tamano_superior_al_limite(self) -> None:
         """Cuando el tamaño excede el máximo se debe reportar un error."""
@@ -227,7 +232,9 @@ class DocumentViewSetTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertIn("upload_url", response.data)
         self.assertEqual(response.data["upload_url"], "https://signed-upload")
-        mocked_upload.assert_called_once()
+        mocked_upload.assert_called_once_with(
+            bucket_key="docs/factura.pdf", mime_type="application/pdf"
+        )
 
         document_id = response.data["document"]["id"]
         document = Document.objects.get(id=document_id)
@@ -265,7 +272,9 @@ class DocumentViewSetTests(APITestCase):
 
         first_step, second_step = document.validation_flow.steps.order_by("order")
         self.assertEqual(first_step.status, ValidationStatus.APPROVED)
+        self.assertIsNotNone(first_step.action_date)
         self.assertEqual(second_step.status, ValidationStatus.APPROVED)
+        self.assertEqual(second_step.reason, "Todo correcto")
 
     def test_reject_marks_document_as_rejected(self) -> None:
         document = self._create_document_with_flow()
@@ -287,6 +296,11 @@ class DocumentViewSetTests(APITestCase):
         step.refresh_from_db()
         self.assertEqual(step.status, ValidationStatus.REJECTED)
         self.assertEqual(step.reason, "Datos incompletos")
+        remaining_pending = document.validation_flow.steps.exclude(id=step.id)
+        self.assertTrue(
+            remaining_pending.filter(status=ValidationStatus.PENDING).exists(),
+            "Los pasos no rechazados deben permanecer pendientes",
+        )
 
     def test_create_denied_for_users_outside_company(self) -> None:
         outsider = get_user_model().objects.create_user(
