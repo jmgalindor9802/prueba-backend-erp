@@ -25,13 +25,14 @@ class CompanyMembershipInline(admin.TabularInline):
 class CompanyAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "created_at", "updated_at")
     search_fields = ("name",)
+    inlines = (CompanyMembershipInline,)
 
 
 @admin.register(EntityReference)
 class EntityReferenceAdmin(admin.ModelAdmin):
     list_display = ("id", "entity_type", "external_identifier", "created_at")
     search_fields = ("entity_type", "external_identifier")
-    inlines = (CompanyMembershipInline,)
+  
 
 
 class ValidationStepInline(admin.TabularInline):
@@ -70,7 +71,7 @@ class ValidationStepAdmin(admin.ModelAdmin):
     search_fields = ("flow__document__name", "approver__username")
     autocomplete_fields = ("flow", "approver")
 
-    class UserCompanyMembershipInline(admin.TabularInline):
+class UserCompanyMembershipInline(admin.TabularInline):
     """Inline para asignar compañías desde el admin de usuarios."""
 
     model = CompanyMembership
