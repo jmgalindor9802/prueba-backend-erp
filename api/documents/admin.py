@@ -1,6 +1,24 @@
 from django.contrib import admin
+from django.contrib.auth import get_user_model
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from .models import (
+    Company,
+    CompanyMembership,
+    Document,
+    EntityReference,
+    ValidationFlow,
+    ValidationStep,
+)
 
-from .models import Company, Document, EntityReference, ValidationFlow, ValidationStep
+
+class CompanyMembershipInline(admin.TabularInline):
+    """Permite administrar las membresías directamente desde el admin."""
+
+    model = CompanyMembership
+    extra = 0
+    autocomplete_fields = ("user",)
+    verbose_name = "Miembro"
+    verbose_name_plural = "Miembros"
 
 
 @admin.register(Company)
@@ -13,6 +31,7 @@ class CompanyAdmin(admin.ModelAdmin):
 class EntityReferenceAdmin(admin.ModelAdmin):
     list_display = ("id", "entity_type", "external_identifier", "created_at")
     search_fields = ("entity_type", "external_identifier")
+    inlines = (CompanyMembershipInline,)
 
 
 class ValidationStepInline(admin.TabularInline):
@@ -50,3 +69,28 @@ class ValidationStepAdmin(admin.ModelAdmin):
     list_filter = ("status", "created_at", "action_date")
     search_fields = ("flow__document__name", "approver__username")
     autocomplete_fields = ("flow", "approver")
+
+    class UserCompanyMembershipInline(admin.TabularInline):
+    """Inline para asignar compañías desde el admin de usuarios."""
+
+    model = CompanyMembership
+    extra = 0
+    autocomplete_fields = ("company",)
+
+
+class UserAdmin(BaseUserAdmin):
+    """Extiende el admin de usuarios para incluir las compañías."""
+
+    inlines = (UserCompanyMembershipInline,)
+
+
+User = get_user_model()
+
+
+try:
+    admin.site.unregister(User)
+except admin.sites.NotRegistered:  # pragma: no cover - defensivo
+    pass
+
+
+admin.site.register(User, UserAdmin)
