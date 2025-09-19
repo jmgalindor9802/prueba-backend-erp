@@ -37,12 +37,13 @@ def generate_signed_url(
     method: str,
     content_type: Optional[str] = None,
     expires_in: Optional[int] = None,
+    bucket_name: Optional[str] = None,
 ) -> str:
     """Genera una URL firmada para el blob indicado."""
 
     client = _build_storage_client()
-    bucket_name = getattr(settings, "GS_BUCKET_NAME")
-    bucket = client.bucket(bucket_name)
+    resolved_bucket = bucket_name or getattr(settings, "GS_BUCKET_NAME")
+    bucket = client.bucket(resolved_bucket)
     blob = bucket.blob(bucket_key)
 
     return blob.generate_signed_url(
@@ -54,7 +55,11 @@ def generate_signed_url(
 
 
 def generate_upload_signed_url(
-    *, bucket_key: str, mime_type: Optional[str] = None, expires_in: Optional[int] = None
+     *,
+    bucket_key: str,
+    mime_type: Optional[str] = None,
+    expires_in: Optional[int] = None,
+    bucket_name: Optional[str] = None,
 ) -> str:
     """Genera una URL firmada de subida usando el método HTTP PUT."""
 
@@ -63,11 +68,12 @@ def generate_upload_signed_url(
         method="PUT",
         content_type=mime_type,
         expires_in=expires_in,
+        bucket_name=bucket_name,
     )
 
 
 def generate_download_signed_url(
-    *, bucket_key: str, expires_in: Optional[int] = None
+    *, bucket_key: str, expires_in: Optional[int] = None, bucket_name: Optional[str] = None
 ) -> str:
     """Genera una URL firmada de descarga usando el método HTTP GET."""
 
@@ -75,6 +81,7 @@ def generate_download_signed_url(
         bucket_key=bucket_key,
         method="GET",
         expires_in=expires_in,
+        bucket_name=bucket_name,
     )
 
 

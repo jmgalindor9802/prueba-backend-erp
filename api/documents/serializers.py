@@ -14,7 +14,9 @@ from .models import (
     EntityReference,
     ValidationFlow,
     ValidationStep,
+    ValidationStatus,
 )
+from .services import build_document_bucket_key, default_bucket_name
 
 DEFAULT_ALLOWED_MIME_TYPES: Iterable[str] = (
     "application/pdf",
@@ -123,6 +125,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             "mime_type",
             "size",
             "file_hash",
+            "bucket_name",
             "bucket_key",
             "company",
             "entity_reference",
@@ -132,12 +135,18 @@ class DocumentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "bucket_name",
+            "bucket_key",
+            "validation_status",
+            "created_at",
+            "updated_at",
+        ]
         extra_kwargs = {
             "name": {"required": True},
             "mime_type": {"required": True},
             "size": {"required": True},
-            "bucket_key": {"required": True},
             "company": {"required": True},
             "entity_reference": {"required": True},
         }
@@ -182,9 +191,25 @@ class DocumentSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data: dict) -> Document:
         flow_data = validated_data.pop("validation_flow", None)
-        steps_data = None
-        if flow_data:
+        has_flow = flow_data is not None
+        steps_data = []
+        if flow_data is not None:
             steps_data = flow_data.pop("steps", [])
+        if has_flow:
+            validated_data.setdefault(
+                "validation_status", ValidationStatus.PENDING
+            )
+
+        validated_data.setdefault("bucket_name", default_bucket_name())
+        if "bucket_key" not in validated_data:
+            company = validated_data["company"]
+            validated_data["bucket_key"] = build_document_bucket_key(
+                company_id=company.id,
+                filename=validated_data["name"],
+            )
+    
+
+    
 
         document = Document.objects.create(**validated_data)
 

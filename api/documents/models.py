@@ -55,6 +55,7 @@ class Document(TimeStampedUUIDModel):
     mime_type = models.CharField(max_length=100)
     size = models.PositiveBigIntegerField()
     file_hash = models.CharField(max_length=128, blank=True, null=True)
+    bucket_name = models.CharField(max_length=255)
     bucket_key = models.CharField(max_length=255)
     company = models.ForeignKey(
         Company, on_delete=models.CASCADE, related_name="documents"

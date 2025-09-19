@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -22,6 +23,7 @@ from .serializers import (
     ValidationFlowSerializer,
 )
 
+
 class DocumentSerializerTests(TestCase):
     """Casos de prueba para el serializer de documentos."""
 
@@ -39,7 +41,6 @@ class DocumentSerializerTests(TestCase):
             "name": "Contrato",
             "mime_type": "application/pdf",
             "size": 2048,
-            "bucket_key": "docs/contrato.pdf",
             "company": str(self.company.id),
             "entity_reference": str(self.entity.id),
         }
@@ -65,13 +66,16 @@ class DocumentSerializerTests(TestCase):
 
         self.assertIsInstance(document, Document)
         self.assertEqual(document.created_by, self.user)
+        self.assertEqual(document.bucket_name, settings.GS_BUCKET_NAME)
+        self.assertTrue(document.bucket_key)
+        self.assertEqual(document.validation_status, ValidationStatus.PENDING)
         self.assertTrue(
             ValidationFlow.objects.filter(document=document).exists(),
             "El flujo de validación no fue creado",
         )
         flow = document.validation_flow
         self.assertEqual(flow.steps.count(), 2)
-         steps = list(flow.steps.order_by("order"))
+        steps = list(flow.steps.order_by("order"))
         self.assertListEqual([step.order for step in steps], [1, 2])
         self.assertEqual([step.approver for step in steps], [self.user, extra_user])
         self.assertTrue(
@@ -109,7 +113,6 @@ class DocumentSerializerTests(TestCase):
             "name",
             "mime_type",
             "size",
-            "bucket_key",
             "company",
             "entity_reference",
         ]:
@@ -143,6 +146,7 @@ class ValidationFlowSerializerTests(TestCase):
             name="Factura",
             mime_type="application/pdf",
             size=1024,
+            bucket_name=settings.GS_BUCKET_NAME,
             bucket_key="docs/factura.pdf",
             company=self.company,
             entity_reference=self.entity,
@@ -171,6 +175,7 @@ class ValidationFlowSerializerTests(TestCase):
             [1, 2],
         )
 
+
 class DocumentViewSetTests(APITestCase):
     """Pruebas de integración para los endpoints del viewset de documentos."""
 
@@ -192,11 +197,12 @@ class DocumentViewSetTests(APITestCase):
 
         self.client.force_authenticate(self.user)
 
-    def _create_document_with_flow(self) -> Document:
+    def _create_document_with_flow(self, assignments=None) -> Document:
         document = Document.objects.create(
             name="Contrato",
             mime_type="application/pdf",
             size=1024,
+            bucket_name=settings.GS_BUCKET_NAME,
             bucket_key="docs/contrato.pdf",
             company=self.company,
             entity_reference=self.entity,
@@ -204,12 +210,17 @@ class DocumentViewSetTests(APITestCase):
             validation_status=ValidationStatus.PENDING,
         )
         flow = ValidationFlow.objects.create(document=document)
-        ValidationStep.objects.create(
-            flow=flow, order=1, approver=self.other_user, status=ValidationStatus.PENDING
-        )
-        ValidationStep.objects.create(
-            flow=flow, order=2, approver=self.user, status=ValidationStatus.PENDING
-        )
+        assignments = assignments or [
+            (1, self.user),
+            (2, self.other_user),
+        ]
+        for order, approver in assignments:
+            ValidationStep.objects.create(
+                flow=flow,
+                order=order,
+                approver=approver,
+                status=ValidationStatus.PENDING,
+            )
         return document
 
     def test_create_document_returns_signed_upload_url(self) -> None:
@@ -218,7 +229,6 @@ class DocumentViewSetTests(APITestCase):
             "name": "Factura",
             "mime_type": "application/pdf",
             "size": 2048,
-            "bucket_key": "docs/factura.pdf",
             "company": str(self.company.id),
             "entity_reference": str(self.entity.id),
         }
@@ -232,14 +242,17 @@ class DocumentViewSetTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertIn("upload_url", response.data)
         self.assertEqual(response.data["upload_url"], "https://signed-upload")
-        mocked_upload.assert_called_once_with(
-            bucket_key="docs/factura.pdf", mime_type="application/pdf"
-        )
+        mocked_upload.assert_called_once()
+        called_kwargs = mocked_upload.call_args.kwargs
+        self.assertEqual(called_kwargs["bucket_name"], settings.GS_BUCKET_NAME)
+        self.assertEqual(called_kwargs["mime_type"], "application/pdf")
 
         document_id = response.data["document"]["id"]
         document = Document.objects.get(id=document_id)
         self.assertEqual(document.created_by, self.user)
-        self.assertEqual(document.validation_status, ValidationStatus.PENDING)
+        self.assertEqual(document.bucket_name, settings.GS_BUCKET_NAME)
+        self.assertIsNone(document.validation_status)
+        self.assertEqual(called_kwargs["bucket_key"], document.bucket_key)
 
     def test_download_returns_signed_url(self) -> None:
         document = self._create_document_with_flow()
@@ -253,16 +266,20 @@ class DocumentViewSetTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["download_url"], "https://signed-download")
-        mocked_download.assert_called_once_with(bucket_key=document.bucket_key)
+        mocked_download.assert_called_once()
+        download_kwargs = mocked_download.call_args.kwargs
+        self.assertEqual(download_kwargs["bucket_key"], document.bucket_key)
+        self.assertEqual(download_kwargs["bucket_name"], document.bucket_name)
 
     def test_approve_updates_document_and_previous_steps(self) -> None:
         document = self._create_document_with_flow()
-        step = document.validation_flow.steps.get(order=2)
 
         url = reverse("document-approve", kwargs={"pk": document.pk})
 
         response = self.client.post(
-            url, {"step_id": str(step.id), "reason": "Todo correcto"}, format="json"
+            url,
+            {"actor_user_id": str(self.user.id), "reason": "Todo correcto"},
+            format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
@@ -273,11 +290,15 @@ class DocumentViewSetTests(APITestCase):
         first_step, second_step = document.validation_flow.steps.order_by("order")
         self.assertEqual(first_step.status, ValidationStatus.APPROVED)
         self.assertIsNotNone(first_step.action_date)
+        self.assertEqual(first_step.reason, "Todo correcto")
         self.assertEqual(second_step.status, ValidationStatus.APPROVED)
-        self.assertEqual(second_step.reason, "Todo correcto")
+        self.assertIsNotNone(second_step.action_date)
+        self.assertEqual(second_step.reason, "")
 
     def test_reject_marks_document_as_rejected(self) -> None:
-        document = self._create_document_with_flow()
+        document = self._create_document_with_flow(
+            assignments=[(1, self.other_user), (2, self.user)]
+        )
         step = document.validation_flow.steps.get(order=1)
 
         # Cambiamos autenticación al aprobador del primer paso
@@ -285,7 +306,9 @@ class DocumentViewSetTests(APITestCase):
 
         url = reverse("document-reject", kwargs={"pk": document.pk})
         response = self.client.post(
-            url, {"step_id": str(step.id), "reason": "Datos incompletos"}, format="json"
+            url,
+            {"actor_user_id": str(self.other_user.id), "reason": "Datos incompletos"},
+            format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
@@ -313,7 +336,6 @@ class DocumentViewSetTests(APITestCase):
             "name": "Factura",
             "mime_type": "application/pdf",
             "size": 2048,
-            "bucket_key": "docs/factura.pdf",
             "company": str(self.company.id),
             "entity_reference": str(self.entity.id),
         }
@@ -322,19 +344,29 @@ class DocumentViewSetTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_approve_denied_for_non_step_approver(self) -> None:
-        document = self._create_document_with_flow()
-        step = document.validation_flow.steps.get(order=1)
+        document = self._create_document_with_flow(
+            assignments=[(1, self.other_user), (2, self.user)]
+        )
 
         url = reverse("document-approve", kwargs={"pk": document.pk})
-        response = self.client.post(url, {"step_id": str(step.id)}, format="json")
+        response = self.client.post(
+            url,
+            {"actor_user_id": str(self.user.id)},
+            format="json",
+        )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_reject_denied_for_non_step_approver(self) -> None:
-        document = self._create_document_with_flow()
-        step = document.validation_flow.steps.get(order=1)
+        document = self._create_document_with_flow(
+            assignments=[(1, self.other_user), (2, self.user)]
+        )
 
         url = reverse("document-reject", kwargs={"pk": document.pk})
-        response = self.client.post(url, {"step_id": str(step.id)}, format="json")
+        response = self.client.post(
+            url,
+            {"actor_user_id": str(self.user.id)},
+            format="json",
+        )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

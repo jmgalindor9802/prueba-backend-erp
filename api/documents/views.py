@@ -8,12 +8,14 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.exceptions import ValidationError
 
 from .models import Document, ValidationStatus
 from .permissions import IsCompanyMember, IsStepApprover
 from .serializers import DocumentSerializer
 from .services import (
+    build_document_bucket_key,
+    default_bucket_name,
     generate_download_signed_url,
     generate_upload_signed_url,
 )
@@ -31,7 +33,6 @@ class DocumentViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
             permissions.append(IsStepApprover())
         return permissions
 
-
     def get_queryset(self):
         user = self.request.user
         if not user or not user.is_authenticated:
@@ -46,20 +47,50 @@ class DocumentViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
             "validation_flow",
         ).prefetch_related("validation_flow__steps")
 
+    def _require_flow(self, document: Document):
+        flow = getattr(document, "validation_flow", None)
+        if not flow:
+            raise ValidationError(
+                "El documento no tiene un flujo de validación asociado."
+            )
+        return flow
+
+    def _get_first_pending_step(self, document: Document):
+        flow = self._require_flow(document)
+        step = (
+            flow.steps.select_for_update()
+            .filter(status=ValidationStatus.PENDING)
+            .order_by("order", "created_at")
+            .first()
+        )
+        if step is None:
+            raise ValidationError("No existen pasos pendientes para este documento.")
+        return step
+
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        validated_status = serializer.validated_data.get("validation_status")
-        if validated_status is None:
-            validated_status = ValidationStatus.PENDING
+        company = serializer.validated_data["company"]
+        bucket_name = default_bucket_name()
+        bucket_key = build_document_bucket_key(
+            company_id=company.id, filename=serializer.validated_data["name"]
+        )
+
+        flow_data = serializer.validated_data.get("validation_flow")
+        validation_status = (
+            ValidationStatus.PENDING if flow_data is not None else None
+        )
 
         document = serializer.save(
             created_by=request.user,
-            validation_status=validated_status,
+            bucket_name=bucket_name,
+            bucket_key=bucket_key,
+            validation_status=validation_status,
         )
 
         upload_url = generate_upload_signed_url(
+            bucket_name=document.bucket_name,
             bucket_key=document.bucket_key,
             mime_type=document.mime_type,
         )
@@ -74,17 +105,10 @@ class DocumentViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
     @action(detail=True, methods=["get"], url_path="download")
     def download(self, request, *args, **kwargs):
         document = self.get_object()
-        url = generate_download_signed_url(bucket_key=document.bucket_key)
+        url = generate_download_signed_url(
+            bucket_name=document.bucket_name, bucket_key=document.bucket_key
+        )
         return Response({"download_url": url})
-
-    def _get_step(self, document: Document, step_id: str):
-        flow = getattr(document, "validation_flow", None)
-        if not flow:
-            raise ValidationError("El documento no tiene un flujo de validación asociado.")
-        try:
-            return flow.steps.get(id=step_id)
-        except flow.steps.model.DoesNotExist as exc:  # type: ignore[attr-defined]
-            raise NotFound("Paso de validación no encontrado.") from exc
 
     @action(detail=True, methods=["post"], url_path="approve")
     def approve(self, request, *args, **kwargs):
@@ -93,21 +117,26 @@ class DocumentViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
         if document.validation_status == ValidationStatus.REJECTED:
             raise ValidationError("El documento ya fue rechazado y no puede aprobarse.")
 
-        step_id = request.data.get("step_id")
-        if not step_id:
-            raise ValidationError({"step_id": "Este campo es obligatorio."})
+        actor_user_id = request.data.get("actor_user_id")
+        if not actor_user_id:
+            raise ValidationError({"actor_user_id": "Este campo es obligatorio."})
+
+        if str(request.user.id) != str(actor_user_id):
+            raise ValidationError(
+                {"actor_user_id": "Debe coincidir con el usuario autenticado."}
+            )
 
         reason = request.data.get("reason", "")
 
-        step = self._get_step(document, step_id)
-        self.check_object_permissions(request, step)
-
-        if step.status == ValidationStatus.REJECTED:
-            raise ValidationError("El paso fue rechazado y no puede aprobarse.")
-
-        now = timezone.now()
-
         with transaction.atomic():
+            step = self._get_first_pending_step(document)
+            self.check_object_permissions(request, step)
+
+            if step.status == ValidationStatus.REJECTED:
+                raise ValidationError("El paso fue rechazado y no puede aprobarse.")
+
+            now = timezone.now()
+
             step.status = ValidationStatus.APPROVED
             step.reason = reason or ""
             step.action_date = now
@@ -115,9 +144,13 @@ class DocumentViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
 
             flow = document.validation_flow
             flow.steps.filter(
-                order__lt=step.order,
+                order__gt=step.order,
                 status=ValidationStatus.PENDING,
-            ).update(status=ValidationStatus.APPROVED, action_date=now)
+            ).update(
+                status=ValidationStatus.APPROVED,
+                action_date=now,
+                updated_at=now,
+            )
 
             remaining_pending = flow.steps.filter(status=ValidationStatus.PENDING).exists()
 
@@ -136,18 +169,23 @@ class DocumentViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
         if document.validation_status == ValidationStatus.APPROVED:
             raise ValidationError("El documento ya fue aprobado y no puede rechazarse.")
 
-        step_id = request.data.get("step_id")
-        if not step_id:
-            raise ValidationError({"step_id": "Este campo es obligatorio."})
+        actor_user_id = request.data.get("actor_user_id")
+        if not actor_user_id:
+            raise ValidationError({"actor_user_id": "Este campo es obligatorio."})
+
+        if str(request.user.id) != str(actor_user_id):
+            raise ValidationError(
+                {"actor_user_id": "Debe coincidir con el usuario autenticado."}
+            )
 
         reason = request.data.get("reason", "")
 
-        step = self._get_step(document, step_id)
-        self.check_object_permissions(request, step)
-
-        now = timezone.now()
-
         with transaction.atomic():
+            step = self._get_first_pending_step(document)
+            self.check_object_permissions(request, step)
+
+            now = timezone.now()
+
             step.status = ValidationStatus.REJECTED
             step.reason = reason or ""
             step.action_date = now
