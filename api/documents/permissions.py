@@ -3,7 +3,13 @@
 from __future__ import annotations
 from typing import Any
 from rest_framework.permissions import BasePermission
-from .models import Company, CompanyMembership, Document, ValidationStep
+from .models import (
+    Company,
+    CompanyMembership,
+    Document,
+    PendingDocumentUpload,
+    ValidationStep,
+)
 
 
 class IsCompanyMember(BasePermission):
@@ -23,6 +29,8 @@ class IsCompanyMember(BasePermission):
             return CompanyMembership.objects.filter(
                 company_id=company_id, user=user
             ).exists()
+        if view.action == "complete_upload":
+            return True
         return True
 
     def has_object_permission(self, request, view, obj: Any) -> bool:

@@ -63,7 +63,59 @@ El servicio web quedará disponible en `http://localhost:8000/` una vez que la b
 - `api/entrypoint.sh`: script que inicializa las migraciones y ejecuta el servidor.
 - `docker-compose.yml`: orquestación de servicios web y base de datos.
 
+## Uso de la API
+
+### Flujo de carga de documentos
+
+1. **Solicitar la URL firmada de carga.**
+   Envía un `POST` a `http://localhost:8000/api/documents/` con un cuerpo JSON similar a:
+
+   ```json
+   {
+     "name": "contrato.pdf",
+     "mime_type": "application/pdf",
+     "size": 34567,
+     "company": "<uuid-de-la-compania>",
+     "entity_reference": "<uuid-de-la-referencia>",
+     "validation_flow": {
+       "steps": [
+         {"order": 1, "approver": "<uuid-aprobador-1>"},
+         {"order": 2, "approver": "<uuid-aprobador-2>"}
+       ]
+     }
+   }
+   ```
+
+   La respuesta incluirá `upload_url` y `upload_token`. El documento aún no se crea en la base de datos.
+
+2. **Subir el archivo real.**
+   Utiliza Postman (o una herramienta similar) para hacer `PUT` a `upload_url` con el archivo binario, configurando el encabezado `Content-Type` según `mime_type`.
+
+3. **Confirmar la carga.**
+   Una vez completada la subida, confirma con `POST http://localhost:8000/api/documents/complete-upload/` enviando:
+
+   ```json
+   {
+     "upload_token": "<token-devuelto-en-el-paso-1>"
+   }
+   ```
+
+   Si el archivo existe en el bucket, se crea el registro definitivo y la respuesta devuelve el documento persistido.
+
+### Descarga del documento
+
+Con el documento creado, solicita `GET http://localhost:8000/api/documents/<id>/download/` para obtener una URL firmada temporal que permite descargar el archivo desde el bucket.
+
+
 ## Notas
 
 - El proyecto usa `django-storages` con Google Cloud Storage como backend de archivos. La caducidad de las URLs firmadas puede ajustarse mediante la variable `GCS_SIGNED_URL_EXPIRES`.
 - Para entornos productivos recuerda desactivar `DEBUG` en `.env` y definir un conjunto de `ALLOWED_HOSTS` específico.
+
+## Pruebas automatizadas
+
+Ejecuta la suite de tests con:
+
+```bash
+python api/manage.py test documents
+```

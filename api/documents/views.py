@@ -10,14 +10,17 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
-from .models import Document, ValidationStatus
+from .models import Document, PendingDocumentUpload, ValidationStatus
 from .permissions import IsCompanyMember, IsStepApprover
 from .serializers import DocumentSerializer
 from .services import (
     build_document_bucket_key,
+    create_document_with_flow,
     default_bucket_name,
+    normalize_flow_steps,
     generate_download_signed_url,
     generate_upload_signed_url,
+    blob_exists,
 )
 
 
@@ -72,35 +75,93 @@ class DocumentViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
         serializer.is_valid(raise_exception=True)
 
         company = serializer.validated_data["company"]
+        entity_reference = serializer.validated_data["entity_reference"]
         bucket_name = default_bucket_name()
         bucket_key = build_document_bucket_key(
             company_id=company.id, filename=serializer.validated_data["name"]
         )
 
         flow_data = serializer.validated_data.get("validation_flow")
-        validation_status = (
-            ValidationStatus.PENDING if flow_data is not None else None
-        )
+        steps = normalize_flow_steps(flow_data.get("steps", [])) if flow_data else []
 
-        document = serializer.save(
-            created_by=request.user,
+        pending = PendingDocumentUpload.objects.create(
+            name=serializer.validated_data["name"],
+            mime_type=serializer.validated_data["mime_type"],
+            size=serializer.validated_data["size"],
+            file_hash=serializer.validated_data.get("file_hash"),
             bucket_name=bucket_name,
             bucket_key=bucket_key,
-            validation_status=validation_status,
+            company=company,
+            entity_reference=entity_reference,
+            created_by=request.user,
+            validation_steps=steps,
         )
 
         upload_url = generate_upload_signed_url(
-            bucket_name=document.bucket_name,
-            bucket_key=document.bucket_key,
-            mime_type=document.mime_type,
+            bucket_name=bucket_name,
+            bucket_key=bucket_key,
+            mime_type=serializer.validated_data["mime_type"],
         )
 
         response_data = {
-            "document": self.get_serializer(document).data,
+            "upload_token": str(pending.id),
             "upload_url": upload_url,
+            "bucket_name": bucket_name,
+            "bucket_key": bucket_key,
         }
-        headers = self.get_success_headers(response_data["document"])
-        return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["post"], url_path="complete-upload")
+    def complete_upload(self, request, *args, **kwargs):
+        upload_token = request.data.get("upload_token")
+        if not upload_token:
+            raise ValidationError({"upload_token": "Este campo es obligatorio."})
+
+        with transaction.atomic():
+            try:
+                pending = (
+                    PendingDocumentUpload.objects.select_for_update()
+                    .select_related("company", "entity_reference", "created_by")
+                    .get(pk=upload_token)
+                )
+            except PendingDocumentUpload.DoesNotExist as exc:  # pragma: no cover
+                raise ValidationError(
+                    {"upload_token": "El token de carga no es válido o expiró."}
+                ) from exc
+
+            self.check_object_permissions(request, pending)
+
+            if pending.created_by_id != request.user.id:
+                raise ValidationError(
+                    {"upload_token": "Solo el autor de la carga puede confirmarla."}
+                )
+
+            if not blob_exists(
+                bucket_name=pending.bucket_name, bucket_key=pending.bucket_key
+            ):
+                raise ValidationError(
+                    "El archivo aún no está disponible en el bucket. "
+                    "Sube el archivo y vuelve a intentarlo."
+                )
+
+            document = create_document_with_flow(
+                name=pending.name,
+                mime_type=pending.mime_type,
+                size=pending.size,
+                file_hash=pending.file_hash,
+                bucket_name=pending.bucket_name,
+                bucket_key=pending.bucket_key,
+                company=pending.company,
+                entity_reference=pending.entity_reference,
+                created_by=pending.created_by,
+                validation_steps=pending.validation_steps,
+            )
+
+            pending.delete()
+
+        return Response(
+            self.get_serializer(document).data, status=status.HTTP_201_CREATED
+        )
 
     @action(detail=True, methods=["get"], url_path="download")
     def download(self, request, *args, **kwargs):

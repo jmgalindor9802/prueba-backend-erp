@@ -16,7 +16,12 @@ from .models import (
     ValidationStep,
     ValidationStatus,
 )
-from .services import build_document_bucket_key, default_bucket_name
+from .services import (
+    build_document_bucket_key,
+    create_document_with_flow,
+    default_bucket_name,
+    normalize_flow_steps,
+)
 
 DEFAULT_ALLOWED_MIME_TYPES: Iterable[str] = (
     "application/pdf",
@@ -191,14 +196,10 @@ class DocumentSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data: dict) -> Document:
         flow_data = validated_data.pop("validation_flow", None)
-        has_flow = flow_data is not None
         steps_data = []
         if flow_data is not None:
             steps_data = flow_data.pop("steps", [])
-        if has_flow:
-            validated_data.setdefault(
-                "validation_status", ValidationStatus.PENDING
-            )
+   
 
         validated_data.setdefault("bucket_name", default_bucket_name())
         if "bucket_key" not in validated_data:
@@ -211,14 +212,15 @@ class DocumentSerializer(serializers.ModelSerializer):
 
     
 
-        document = Document.objects.create(**validated_data)
+        normalized_steps = normalize_flow_steps(steps_data)
 
-        if flow_data is not None:
-            flow = ValidationFlow.objects.create(document=document, **flow_data)
-            for step_data in steps_data:
-                ValidationStep.objects.create(flow=flow, **step_data)
+        if normalized_steps and not validated_data.get("validation_status"):
+            validated_data["validation_status"] = ValidationStatus.PENDING
 
-        return document
+        return create_document_with_flow(
+            validation_steps=normalized_steps,
+            **validated_data,
+        )     
 
     def update(self, instance: Document, validated_data: dict) -> Document:
         # No se gestionan modificaciones del flujo desde este serializer.

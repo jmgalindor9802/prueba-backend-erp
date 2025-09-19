@@ -22,10 +22,10 @@ class Company(TimeStampedUUIDModel):
 
     name = models.CharField(max_length=255)
     members = models.ManyToManyField(
-    settings.AUTH_USER_MODEL,
-    through="CompanyMembership",
-    related_name="companies",
-    blank=True,
+        settings.AUTH_USER_MODEL,
+        through="CompanyMembership",
+        related_name="companies",
+        blank=True,
     )
 
     def __str__(self) -> str:  # pragma: no cover - representación simple
@@ -137,3 +137,32 @@ class CompanyMembership(TimeStampedUUIDModel):
 
     def __str__(self) -> str:  # pragma: no cover - representación simple
         return f"{self.user_id} -> {self.company_id}"
+        
+
+class PendingDocumentUpload(TimeStampedUUIDModel):
+    """Carga de documento aún no confirmada en el bucket."""
+
+    name = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=100)
+    size = models.PositiveBigIntegerField()
+    file_hash = models.CharField(max_length=128, blank=True, null=True)
+    bucket_name = models.CharField(max_length=255)
+    bucket_key = models.CharField(max_length=255, unique=True)
+    company = models.ForeignKey(
+        Company, on_delete=models.CASCADE, related_name="pending_uploads"
+    )
+    entity_reference = models.ForeignKey(
+        EntityReference, on_delete=models.CASCADE, related_name="pending_uploads"
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="pending_document_uploads",
+    )
+    validation_steps = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:  # pragma: no cover - representación simple
+        return f"Carga pendiente de {self.name}"

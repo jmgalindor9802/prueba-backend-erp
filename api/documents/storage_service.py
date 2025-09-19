@@ -55,7 +55,7 @@ def generate_signed_url(
 
 
 def generate_upload_signed_url(
-     *,
+    *,
     bucket_key: str,
     mime_type: Optional[str] = None,
     expires_in: Optional[int] = None,
@@ -84,9 +84,18 @@ def generate_download_signed_url(
         bucket_name=bucket_name,
     )
 
+def blob_exists(*, bucket_key: str, bucket_name: Optional[str] = None) -> bool:
+    """Verifica si un blob existe en el bucket configurado."""
+
+    client = _build_storage_client()
+    resolved_bucket = bucket_name or getattr(settings, "GS_BUCKET_NAME")
+    bucket = client.bucket(resolved_bucket)
+    blob = bucket.blob(bucket_key)
+    return blob.exists()
 
 __all__ = [
     "generate_signed_url",
     "generate_upload_signed_url",
     "generate_download_signed_url",
+    "blob_exists",
 ]
